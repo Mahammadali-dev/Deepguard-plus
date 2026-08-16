@@ -111,9 +111,12 @@ IMPORTANT RULES:
 - heatmapRegions should highlight the most suspicious areas.
 - Return ONLY valid JSON, no additional text.`;
 
-  const response = await fetch(`${API_URL}?key=${API_KEY}`, {
+  const response = await fetch(API_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'x-goog-api-key': API_KEY 
+    },
     body: JSON.stringify({
       contents: [{
         parts: [
