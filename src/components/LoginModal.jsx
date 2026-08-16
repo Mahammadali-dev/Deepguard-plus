@@ -1,10 +1,15 @@
 import React, { useState, useRef } from 'react';
+import { signInWithGoogle, signInWithGitHub, signInWithMicrosoft } from '../services/firebase';
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 
 const LoginModal = ({ isOpen, onClose, onLogin }) => {
   const modalRef = useRef(null);
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(false);
 
   if (!isOpen) return null;
 
@@ -14,12 +19,58 @@ const LoginModal = ({ isOpen, onClose, onLogin }) => {
     }
   };
 
-  const handleMockLogin = (e) => {
-    e?.preventDefault();
-    onLogin({
-      displayName: 'Demo User',
-      email: email || 'demo@deepguard.in',
-    });
+  const handleEmailAuth = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const auth = getAuth();
+      let userCredential;
+      if (isSignUp) {
+        userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        await updateProfile(userCredential.user, {
+          displayName: email.split('@')[0],
+        });
+      } else {
+        userCredential = await signInWithEmailAndPassword(auth, email, password);
+      }
+      onLogin(userCredential.user);
+      onClose();
+    } catch (err) {
+      const messages = {
+        'auth/user-not-found': 'No account found. Try signing up instead.',
+        'auth/wrong-password': 'Incorrect password.',
+        'auth/invalid-credential': 'Invalid email or password.',
+        'auth/email-already-in-use': 'Email already registered. Try signing in.',
+        'auth/weak-password': 'Password must be at least 6 characters.',
+        'auth/invalid-email': 'Please enter a valid email address.',
+      };
+      setError(messages[err.code] || err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSSO = async (provider) => {
+    setError('');
+    setLoading(true);
+    try {
+      let result;
+      if (provider === 'google') result = await signInWithGoogle();
+      else if (provider === 'github') result = await signInWithGitHub();
+      else if (provider === 'microsoft') result = await signInWithMicrosoft();
+      onLogin(result.user);
+      onClose();
+    } catch (err) {
+      if (err.code === 'auth/popup-closed-by-user') return;
+      if (err.code === 'auth/account-exists-with-different-credential') {
+        setError('An account already exists with this email. Try a different sign-in method.');
+      } else {
+        setError(err.message);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -50,15 +101,23 @@ const LoginModal = ({ isOpen, onClose, onLogin }) => {
               <span className="material-symbols-outlined text-primary text-2xl">shield_lock</span>
             </div>
             <h2 className="text-2xl font-bold text-on-surface tracking-tight font-headline-md mb-2">
-              Welcome Back
+              {isSignUp ? 'Create Account' : 'Welcome Back'}
             </h2>
             <p className="text-sm text-on-surface-variant">
-              Sign in to access your secure workspace
+              {isSignUp ? 'Sign up to start verifying media' : 'Sign in to access your secure workspace'}
             </p>
           </div>
 
+          {/* Error Banner */}
+          {error && (
+            <div className="mb-4 p-3 bg-error/10 border border-error/30 rounded-lg flex items-start gap-2">
+              <span className="material-symbols-outlined text-error text-[18px] mt-0.5">error</span>
+              <p className="text-sm text-error">{error}</p>
+            </div>
+          )}
+
           {/* Form */}
-          <form onSubmit={handleMockLogin} className="space-y-5">
+          <form onSubmit={handleEmailAuth} className="space-y-5">
             <div className="space-y-4">
               {/* Email Input */}
               <div className="relative">
@@ -87,6 +146,7 @@ const LoginModal = ({ isOpen, onClose, onLogin }) => {
                   className="w-full pl-10 pr-12 py-3 bg-surface-container border border-outline rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent outline-none text-on-surface placeholder:text-on-surface-variant/60 transition-all"
                   placeholder="••••••••"
                   required
+                  minLength={6}
                 />
                 <button
                   type="button"
@@ -101,28 +161,48 @@ const LoginModal = ({ isOpen, onClose, onLogin }) => {
             </div>
 
             {/* Options */}
-            <div className="flex items-center justify-between text-sm">
-              <label className="flex items-center gap-2 cursor-pointer group">
-                <input 
-                  type="checkbox" 
-                  className="w-4 h-4 rounded border-outline bg-surface-container text-primary focus:ring-primary/50 focus:ring-offset-surface cursor-pointer" 
-                />
-                <span className="text-on-surface-variant group-hover:text-on-surface transition-colors">Remember me</span>
-              </label>
-              <a href="#" className="text-primary hover:text-primary/80 font-medium transition-colors">
-                Forgot password?
-              </a>
-            </div>
+            {!isSignUp && (
+              <div className="flex items-center justify-between text-sm">
+                <label className="flex items-center gap-2 cursor-pointer group">
+                  <input 
+                    type="checkbox" 
+                    className="w-4 h-4 rounded border-outline bg-surface-container text-primary focus:ring-primary/50 focus:ring-offset-surface cursor-pointer" 
+                  />
+                  <span className="text-on-surface-variant group-hover:text-on-surface transition-colors">Remember me</span>
+                </label>
+                <a href="#" className="text-primary hover:text-primary/80 font-medium transition-colors">
+                  Forgot password?
+                </a>
+              </div>
+            )}
 
             {/* Submit Button */}
             <button
               type="submit"
-              className="group flex items-center justify-center gap-2 w-full py-3 px-4 bg-inverse-primary text-white rounded-lg font-medium hover:bg-inverse-primary/90 focus:ring-4 focus:ring-inverse-primary/30 transition-all"
+              disabled={loading}
+              className="group flex items-center justify-center gap-2 w-full py-3 px-4 bg-inverse-primary text-white rounded-lg font-medium hover:bg-inverse-primary/90 focus:ring-4 focus:ring-inverse-primary/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
             >
-              <span>Sign In</span>
-              <span className="material-symbols-outlined text-[18px] transform group-hover:translate-x-1 transition-transform">arrow_forward</span>
+              {loading ? (
+                <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>
+              ) : (
+                <>
+                  <span>{isSignUp ? 'Create Account' : 'Sign In'}</span>
+                  <span className="material-symbols-outlined text-[18px] transform group-hover:translate-x-1 transition-transform">arrow_forward</span>
+                </>
+              )}
             </button>
           </form>
+
+          {/* Toggle Sign Up / Sign In */}
+          <p className="text-center text-sm text-on-surface-variant mt-4">
+            {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
+            <button
+              onClick={() => { setIsSignUp(!isSignUp); setError(''); }}
+              className="text-primary font-medium hover:text-primary/80 transition-colors"
+            >
+              {isSignUp ? 'Sign In' : 'Sign Up'}
+            </button>
+          </p>
 
           {/* Divider */}
           <div className="flex items-center gap-4 my-6">
@@ -135,9 +215,10 @@ const LoginModal = ({ isOpen, onClose, onLogin }) => {
           <div className="grid grid-cols-3 gap-3">
             {/* Google */}
             <button
-              onClick={handleMockLogin}
+              onClick={() => handleSSO('google')}
+              disabled={loading}
               type="button"
-              className="flex items-center justify-center p-2.5 border border-outline rounded-lg bg-surface-container hover:bg-outline-variant/30 transition-colors"
+              className="flex items-center justify-center p-2.5 border border-outline rounded-lg bg-surface-container hover:bg-outline-variant/30 transition-colors active:scale-95 disabled:opacity-50"
               aria-label="Sign in with Google"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24">
@@ -149,9 +230,10 @@ const LoginModal = ({ isOpen, onClose, onLogin }) => {
             </button>
             {/* GitHub */}
             <button
-              onClick={handleMockLogin}
+              onClick={() => handleSSO('github')}
+              disabled={loading}
               type="button"
-              className="flex items-center justify-center p-2.5 border border-outline rounded-lg bg-surface-container hover:bg-outline-variant/30 text-on-surface transition-colors"
+              className="flex items-center justify-center p-2.5 border border-outline rounded-lg bg-surface-container hover:bg-outline-variant/30 text-on-surface transition-colors active:scale-95 disabled:opacity-50"
               aria-label="Sign in with GitHub"
             >
               <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
@@ -160,9 +242,10 @@ const LoginModal = ({ isOpen, onClose, onLogin }) => {
             </button>
             {/* Microsoft */}
             <button
-              onClick={handleMockLogin}
+              onClick={() => handleSSO('microsoft')}
+              disabled={loading}
               type="button"
-              className="flex items-center justify-center p-2.5 border border-outline rounded-lg bg-surface-container hover:bg-outline-variant/30 transition-colors"
+              className="flex items-center justify-center p-2.5 border border-outline rounded-lg bg-surface-container hover:bg-outline-variant/30 transition-colors active:scale-95 disabled:opacity-50"
               aria-label="Sign in with Microsoft"
             >
               <svg className="w-5 h-5" viewBox="0 0 21 21">
