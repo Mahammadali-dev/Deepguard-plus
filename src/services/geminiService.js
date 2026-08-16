@@ -2,7 +2,7 @@
 // Uses Google Gemini 2.0 Flash for deepfake analysis
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent';
 
 /**
  * Convert a File/Blob to base64 string
