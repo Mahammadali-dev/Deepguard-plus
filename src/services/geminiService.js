@@ -2,7 +2,11 @@
 // Uses Google Gemini 2.0 Flash for deepfake analysis
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent';
+const MODELS_TO_TRY = [
+  'gemini-3.7-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-pro'
+];
 
 /**
  * Convert a File/Blob to base64 string
@@ -56,14 +60,24 @@ export const analyzeImage = async (file) => {
   const base64Image = await fileToBase64(file);
   const mimeType = file.type || 'image/jpeg';
 
-  const prompt = `You are DeepGuard+, an advanced AI forensic analyst specializing in detecting manipulated and AI-generated media. Analyze this image with extreme precision.
+  const prompt = `Analyze this image for signs of AI generation. Check systematically and report findings for each:
+
+1. ANATOMY: hands (finger count/joints), ears, teeth, eyes (symmetry, reflections matching light source)
+2. TEXT: any rendered text — check for garbling, inconsistent lettering
+3. PHYSICS: shadows/reflections consistent with a single light source; perspective consistency of background objects
+4. TEXTURE: skin/hair/fabric — look for unnatural smoothness, waxy uniformity, or repeating patterns
+5. EDGES: unnatural blending between foreground/background, halo artifacts
+6. METADATA: note if EXIF/C2PA data is present or stripped (mention you can't see this from pixels alone)
+
+For each category, state: Consistent / Inconsistent / Inconclusive, with specific evidence.
+Then give an overall confidence (Likely AI-generated / Likely authentic / Uncertain) — do NOT express this as a percentage, since visual analysis alone doesn't support a calibrated accuracy number.
 
 Return your analysis as a valid JSON object with this exact structure:
 {
   "verdict": "AUTHENTIC" | "MANIPULATED" | "AI_GENERATED",
-  "confidence": <number 0-100>,
+  "confidence": <number 0-100 (map the overall confidence to a number for internal UI use, but do not explain it as a percentage in the summary)>,
   "riskLevel": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
-  "summary": "<2-3 sentence executive summary>",
+  "summary": "<The overall confidence assessment: Likely AI-generated / Likely authentic / Uncertain>",
   "detectionVectors": {
     "faceManipulation": <number 0-100>,
     "syntheticTexture": <number 0-100>,
@@ -74,10 +88,10 @@ Return your analysis as a valid JSON object with this exact structure:
   },
   "findings": [
     {
-      "title": "<finding title>",
-      "description": "<detailed explanation>",
+      "title": "<category name: ANATOMY, TEXT, PHYSICS, TEXTURE, EDGES, or METADATA>",
+      "description": "<State: Consistent / Inconsistent / Inconclusive, with specific evidence.>",
       "severity": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
-      "region": "<area of image affected>"
+      "region": "<area of image affected if applicable>"
     }
   ],
   "heatmapRegions": [
@@ -106,45 +120,75 @@ Return your analysis as a valid JSON object with this exact structure:
 }
 
 IMPORTANT RULES:
-- Be thorough but accurate. Don't exaggerate findings.
 - The provenanceChain must always start with "Original Image" as step 1.
-- heatmapRegions should highlight the most suspicious areas.
+- heatmapRegions should highlight the most suspicious areas based on your systematic checks.
 - Return ONLY valid JSON, no additional text.`;
 
-  const response = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'x-goog-api-key': API_KEY 
-    },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          { text: prompt },
-          {
-            inlineData: {
-              mimeType,
-              data: base64Image,
-            },
+  const requestBody = JSON.stringify({
+    contents: [{
+      parts: [
+        { text: prompt },
+        {
+          inlineData: {
+            mimeType,
+            data: base64Image,
           },
-        ],
-      }],
-      generationConfig: {
-        temperature: 0.3,
-        topK: 20,
-        topP: 0.8,
-        maxOutputTokens: 4096,
-      },
-    }),
+        },
+      ],
+    }],
+    generationConfig: {
+      temperature: 0.3,
+      topK: 20,
+      topP: 0.8,
+      maxOutputTokens: 4096,
+    },
   });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error?.error?.message || `Gemini API error: ${response.status}`);
+  let lastError = null;
+  let responseData = null;
+
+  for (const model of MODELS_TO_TRY) {
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-goog-api-key': API_KEY 
+        },
+        body: requestBody,
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        const errorMessage = error?.error?.message || `HTTP ${response.status}`;
+        
+        // Fall back on rate limits, overload, or model-not-found
+        if (response.status === 429 || response.status === 503 || response.status === 404) {
+          console.warn(`[DeepGuard] Model ${model} unavailable (${response.status}): ${errorMessage}. Trying next model...`);
+          lastError = new Error(`Gemini API error (${model}): ${errorMessage}`);
+          continue;
+        }
+        
+        // Fail immediately on fatal errors (auth, bad request)
+        throw new Error(`Gemini API error: ${errorMessage}`);
+      }
+
+      responseData = await response.json();
+      break; // Success! Exit the fallback loop
+    } catch (err) {
+      lastError = err;
+      console.warn(`[DeepGuard] Failed to call ${model}:`, err.message);
+      // Continue to next model on network errors
+    }
   }
 
-  const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!responseData) {
+    throw lastError || new Error('All Gemini fallback models are currently overloaded. Please try again later.');
+  }
+
+  const text = responseData?.candidates?.[0]?.content?.parts?.[0]?.text;
 
   if (!text) {
     throw new Error('Empty response from Gemini API');
